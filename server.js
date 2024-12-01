@@ -1,73 +1,53 @@
 const express = require('express');
 const axios = require('axios');
+const bodyParser = require('body-parser');
+require('dotenv').config();
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware to parse JSON
-app.use(express.json());
+// Middleware to parse incoming JSON
+app.use(bodyParser.json());
 
-// Webhook Verification for Messenger
-app.get('/webhook', (req, res) => {
-    const VERIFY_TOKEN = process.env.SECRET_TOKEN || 'my_secure_token';
+// Webhook route
+app.post('/webhook', async (req, res) => {
+    const userMessage = req.body.message;
 
-    const mode = req.query['hub.mode'];
-    const token = req.query['hub.verify_token'];
-    const challenge = req.query['hub.challenge'];
-
-    if (mode && token === VERIFY_TOKEN) {
-        if (mode === 'subscribe') {
-            console.log('Webhook verified.');
-            return res.status(200).send(challenge);
-        }
-    } else {
-        res.sendStatus(403);
+    if (!userMessage) {
+        return res.status(400).json({ reply: "Oops! Looks like you forgot to type something. Give it another shot!" });
     }
-});
 
-// Handle POST requests from Messenger and Website
-app.post('/webhook', (req, res) => {
-    const body = req.body;
-
-    // Messenger Events
-    if (body.object === 'page') {
-        body.entry.forEach(entry => {
-            const webhookEvent = entry.messaging[0];
-            const senderId = webhookEvent.sender.id;
-
-            if (webhookEvent.message) {
-                const userMessage = webhookEvent.message.text;
-                sendMessageToMessenger(senderId, `You said: "${userMessage}"`);
+    try {
+        // Send user message to OpenAI GPT API
+        const gptResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
+            model: 'gpt-4',
+            messages: [
+                {
+                    role: 'system',
+                    content: "You are Larry's Support Manager, a witty and helpful assistant. Provide entertaining, humorous, and helpful responses while solving technical issues."
+                },
+                { role: 'user', content: userMessage }
+            ],
+            max_tokens: 300,
+            temperature: 0.85
+        }, {
+            headers: {
+                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`, // Securely access environment variable
+                'Content-Type': 'application/json'
             }
         });
-        return res.status(200).send('EVENT_RECEIVED');
-    }
 
-    // Website Events
-    if (body.message) {
-        const userMessage = body.message;
-        const botReply = `You said: "${userMessage}". How can I assist you?`;
-        return res.status(200).json({ reply: botReply });
-    }
+        const botReply = gptResponse.data.choices[0].message.content;
 
-    // Fallback for unmatched requests
-    res.sendStatus(404);
+        // Respond to the user
+        res.status(200).json({ reply: botReply });
+    } catch (error) {
+        console.error('Error communicating with GPT API:', error.message);
+        res.status(500).json({ reply: "Uh-oh, something went wrong on my end. Can you try again?" });
+    }
 });
-
-// Send Messages to Messenger
-const sendMessageToMessenger = (senderId, text) => {
-    const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
-    const requestBody = {
-        recipient: { id: senderId },
-        message: { text },
-    };
-
-    axios
-        .post(`https://graph.facebook.com/v12.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`, requestBody)
-        .then(response => console.log('Message sent to Messenger:', response.data))
-        .catch(error => console.error('Error sending message to Messenger:', error.message));
-};
 
 // Start the server
 app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+    console.log(`Server running on port ${PORT}`);
 });
